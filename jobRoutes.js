@@ -7,11 +7,11 @@ import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 
-import { downloadFromYoutube } from "../utils/downloadVideo.js";
-import { extractAudio, cutAndFormatClip } from "../utils/videoProcessing.js";
-import { transcribeAudio } from "../utils/transcribe.js";
-import { findHighlights } from "../utils/findHighlights.js";
-import { uploadClip } from "../utils/uploadToCloud.js";
+import { downloadFromYoutube } from "./downloadVideo.js";
+import { extractAudio, cutAndFormatClip } from "./videoProcessing.js";
+import { transcribeAudio } from "./transcribe.js";
+import { findHighlights } from "./findHighlights.js";
+import { uploadClip } from "./uploadToCloud.js";
 
 const router = express.Router();
 
