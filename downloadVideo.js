@@ -10,7 +10,13 @@ export function downloadFromYoutube(url, outputDir) {
   return new Promise((resolve, reject) => {
     execFile(
       "yt-dlp",
-      ["-f", "mp4", "--no-playlist", "-o", outputPath, url],
+      [
+        "-f", "mp4",
+        "--no-playlist",
+        "--extractor-args", "youtube:player_client=android",
+        "-o", outputPath,
+        url,
+      ],
       (error) => {
         if (error) return reject(error);
         resolve(outputPath);
