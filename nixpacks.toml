@@ -1,0 +1,14 @@
+# Ye file Railway ko batati hai ki server pe FFmpeg aur Python (yt-dlp ke liye) bhi install karo
+# Tumhe is file ko edit karne ki zaroorat nahi, bas GitHub pe upload kar dena
+
+[phases.setup]
+nixPkgs = ["ffmpeg", "python3", "pip"]
+
+[phases.install]
+cmds = [
+  "pip install yt-dlp",
+  "npm install"
+]
+
+[start]
+cmd = "npm start"
