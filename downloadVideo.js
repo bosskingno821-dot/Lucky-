@@ -1,6 +1,3 @@
-// downloadVideo.js
-// Ye file YouTube link se video download karti hai (system yt-dlp use karke)
-
 import { execFile } from "child_process";
 import path from "path";
 
@@ -13,7 +10,7 @@ export function downloadFromYoutube(url, outputDir) {
       [
         "-f", "mp4",
         "--no-playlist",
-        "--extractor-args", "youtube:player_client=android",
+        "--extractor-args", "youtube:player_client=ios",
         "-o", outputPath,
         url,
       ],
