@@ -7,7 +7,7 @@ import fs from "fs";
 import path from "path";
 import { v4 as uuidv4 } from "uuid";
 
-import { downloadFromYoutube } from "./downloadVideo.js";
+import { downloadVideo } from "./downloadVideo.js";
 import { extractAudio, cutAndFormatClip } from "./videoProcessing.js";
 import { transcribeAudio } from "./transcribe.js";
 import { findHighlights } from "./findHighlights.js";
