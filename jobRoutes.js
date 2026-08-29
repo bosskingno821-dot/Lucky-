@@ -63,7 +63,7 @@ async function processVideo(jobId, youtubeUrl) {
 
   // Step 1: Video download karo
   jobs[jobId].step = "downloading";
-  const videoPath = await downloadFromYoutube(youtubeUrl, workDir);
+  const videoPath = await downloadVideo(youtubeUrl, workDir);
 
   // Step 2: Audio nikalo
   jobs[jobId].step = "extracting_audio";
