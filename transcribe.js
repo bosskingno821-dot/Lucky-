@@ -1,16 +1,15 @@
 // transcribe.js
 // Ye file audio ko FREE open-source Whisper model se transcribe karti hai
-// (Xenova/transformers library - bina kisi paid API ke, seedha server pe chalta hai)
 
 import { pipeline } from "@xenova/transformers";
+import ffmpeg from "fluent-ffmpeg";
+import fs from "fs";
+import path from "path";
 
 let transcriberPromise = null;
 
-// Model ek baar load hota hai aur reuse hota hai (fast rehta hai baad ke calls ke liye)
 function getTranscriber() {
   if (!transcriberPromise) {
-    // "tiny" model use kar rahe hain kyunki free server pe kam RAM/CPU hoti hai
-    // Accuracy thodi kam ho sakti hai bade "large" models ke comparison mein, but bilkul free hai
     transcriberPromise = pipeline(
       "automatic-speech-recognition",
       "Xenova/whisper-tiny"
@@ -19,21 +18,48 @@ function getTranscriber() {
   return transcriberPromise;
 }
 
-/**
- * Audio file ko transcribe karta hai (FREE open-source Whisper)
- * @param {string} audioFilePath - local path jahan audio file save hai
- * @returns {Array} timestamped segments: [{start, end, text}]
- */
+// Audio ko 16kHz raw PCM mein convert karta hai (Whisper ko yehi chahiye)
+function convertToRawAudio(audioFilePath, outputDir) {
+  const rawPath = path.join(outputDir, "audio_raw.wav");
+  return new Promise((resolve, reject) => {
+    ffmpeg(audioFilePath)
+      .audioChannels(1)
+      .audioFrequency(16000)
+      .format("wav")
+      .output(rawPath)
+      .on("end", () => resolve(rawPath))
+      .on("error", reject)
+      .run();
+  });
+}
+
+// WAV file ko Float32Array mein padhta hai (Whisper ke liye zaroori format)
+function readWavAsFloat32(wavPath) {
+  const buffer = fs.readFileSync(wavPath);
+  // WAV header 44 bytes ka hota hai, usko skip karke raw audio data nikaalte hain
+  const dataStart = 44;
+  const samples = (buffer.length - dataStart) / 2;
+  const float32Array = new Float32Array(samples);
+  for (let i = 0; i < samples; i++) {
+    const int16 = buffer.readInt16LE(dataStart + i * 2);
+    float32Array[i] = int16 / 32768;
+  }
+  return float32Array;
+}
+
 export async function transcribeAudio(audioFilePath) {
+  const outputDir = path.dirname(audioFilePath);
+  const rawPath = await convertToRawAudio(audioFilePath, outputDir);
+  const audioData = readWavAsFloat32(rawPath);
+
   const transcriber = await getTranscriber();
 
-  const output = await transcriber(audioFilePath, {
-    chunk_length_s: 30, // 30-second chunks mein process karta hai
+  const output = await transcriber(audioData, {
+    chunk_length_s: 30,
     stride_length_s: 5,
-    return_timestamps: "chunk", // har chunk ka start/end time deta hai
+    return_timestamps: "chunk",
   });
 
-  // output.chunks mein timestamped text milta hai
   return output.chunks.map((chunk) => ({
     start: chunk.timestamp[0],
     end: chunk.timestamp[1] ?? chunk.timestamp[0] + 5,
