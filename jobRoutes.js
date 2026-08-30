@@ -1,10 +1,10 @@
 // jobRoutes.js
 // Ye file poora pipeline chalati hai: download -> audio nikalna -> transcribe -> highlights dhundna -> clips banana -> upload
-// Website (frontend) yahi routes ko call karegi
 
 import express from "express";
 import fs from "fs";
 import path from "path";
+import ffmpeg from "fluent-ffmpeg";
 import { v4 as uuidv4 } from "uuid";
 
 import { downloadVideo } from "./downloadVideo.js";
@@ -15,15 +15,11 @@ import { uploadClip } from "./uploadToCloud.js";
 
 const router = express.Router();
 
-// Job ka status yaad rakhne ke liye simple memory storage
-// (Production mein ye database mein rakhte hain, abhi ke liye simple)
 const jobs = {};
 
-/**
- * POST /api/jobs/start
- * Body: { youtubeUrl: "https://youtube.com/..." }
- * Naya processing job shuru karta hai
- */
+// Free server (1GB RAM) ke liye safe limit - isse zyada lamba video crash kar sakta hai
+const MAX_DURATION_SECONDS = 6 * 60; // 6 minutes
+
 router.post("/start", async (req, res) => {
   const { youtubeUrl } = req.body;
   if (!youtubeUrl) {
@@ -33,10 +29,8 @@ router.post("/start", async (req, res) => {
   const jobId = uuidv4();
   jobs[jobId] = { status: "processing", step: "downloading", clips: [] };
 
-  // Response turant bhej do, processing background mein chalti rahegi
   res.json({ jobId, status: "processing" });
 
-  // Background mein poora pipeline chalao
   processVideo(jobId, youtubeUrl).catch((err) => {
     console.error("Job failed:", err);
     jobs[jobId].status = "failed";
@@ -44,58 +38,65 @@ router.post("/start", async (req, res) => {
   });
 });
 
-/**
- * GET /api/jobs/:jobId/status
- * Job ka current status check karta hai (frontend isko baar-baar poll karega)
- */
 router.get("/:jobId/status", (req, res) => {
   const job = jobs[req.params.jobId];
   if (!job) return res.status(404).json({ error: "Job nahi mila" });
   res.json(job);
 });
 
-/**
- * Poora processing pipeline - step by step
- */
+// Video/audio file ki duration seconds mein nikalta hai
+function getDuration(filePath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(filePath, (err, metadata) => {
+      if (err) return reject(err);
+      resolve(metadata.format.duration);
+    });
+  });
+}
+
 async function processVideo(jobId, youtubeUrl) {
   const workDir = path.join("temp", jobId);
   fs.mkdirSync(workDir, { recursive: true });
 
-  // Step 1: Video download karo
-  jobs[jobId].step = "downloading";
-  const videoPath = await downloadVideo(youtubeUrl, workDir);
+  try {
+    jobs[jobId].step = "downloading";
+    const videoPath = await downloadVideo(youtubeUrl, workDir);
 
-  // Step 2: Audio nikalo
-  jobs[jobId].step = "extracting_audio";
-  const audioPath = await extractAudio(videoPath, workDir);
+    // Safety check: bahut lambi video ko yahin reject karo, crash hone se pehle
+    const duration = await getDuration(videoPath);
+    if (duration > MAX_DURATION_SECONDS) {
+      throw new Error(
+        `Video bahut lamba hai (${Math.round(duration / 60)} minute). Free plan pe abhi sirf ${MAX_DURATION_SECONDS / 60} minute tak ke video support hain, taaki server crash na ho.`
+      );
+    }
 
-  // Step 3: Transcribe karo (Whisper)
-  jobs[jobId].step = "transcribing";
-  const segments = await transcribeAudio(audioPath);
+    jobs[jobId].step = "extracting_audio";
+    const audioPath = await extractAudio(videoPath, workDir);
 
-  // Step 4: Highlights dhundo (Claude)
-  jobs[jobId].step = "finding_highlights";
-  const highlights = await findHighlights(segments);
+    jobs[jobId].step = "transcribing";
+    const segments = await transcribeAudio(audioPath);
 
-  // Step 5: Har highlight ka clip cut karo aur upload karo
-  jobs[jobId].step = "cutting_clips";
-  const finalClips = [];
+    jobs[jobId].step = "finding_highlights";
+    const highlights = await findHighlights(segments);
 
-  for (let i = 0; i < highlights.length; i++) {
-    const h = highlights[i];
-    const clipPath = path.join(workDir, `clip_${i}.mp4`);
-    await cutAndFormatClip(videoPath, h.start, h.end, clipPath);
-    const url = await uploadClip(clipPath);
-    finalClips.push({ title: h.title, reason: h.reason, url });
+    jobs[jobId].step = "cutting_clips";
+    const finalClips = [];
+
+    for (let i = 0; i < highlights.length; i++) {
+      const h = highlights[i];
+      const clipPath = path.join(workDir, `clip_${i}.mp4`);
+      await cutAndFormatClip(videoPath, h.start, h.end, clipPath);
+      const url = await uploadClip(clipPath);
+      finalClips.push({ title: h.title, reason: h.reason, url });
+    }
+
+    jobs[jobId].status = "completed";
+    jobs[jobId].step = "done";
+    jobs[jobId].clips = finalClips;
+  } finally {
+    // Chahe success ho ya fail, temp files hamesha clean karo (space bachane ke liye)
+    fs.rmSync(workDir, { recursive: true, force: true });
   }
-
-  // Step 6: Done!
-  jobs[jobId].status = "completed";
-  jobs[jobId].step = "done";
-  jobs[jobId].clips = finalClips;
-
-  // Temporary files clean up kar do (space bachane ke liye)
-  fs.rmSync(workDir, { recursive: true, force: true });
 }
 
 export default router;
