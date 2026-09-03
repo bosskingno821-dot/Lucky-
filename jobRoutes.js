@@ -1,9 +1,10 @@
 // jobRoutes.js
-// Ye file poora pipeline chalati hai: download -> audio nikalna -> transcribe -> highlights dhundna -> clips banana -> upload
+// Ye file poora pipeline chalati hai: download/upload -> audio nikalna -> transcribe -> highlights dhundna -> clips banana -> upload
 
 import express from "express";
 import fs from "fs";
 import path from "path";
+import multer from "multer";
 import ffmpeg from "fluent-ffmpeg";
 import { v4 as uuidv4 } from "uuid";
 
@@ -17,8 +18,14 @@ const router = express.Router();
 
 const jobs = {};
 
-// Free server (1GB RAM) ke liye safe limit - isse zyada lamba video crash kar sakta hai
-const MAX_DURATION_SECONDS = 6 * 60; // 6 minutes
+const MAX_DURATION_SECONDS = 6 * 60;
+
+const uploadDir = "temp/_uploads";
+fs.mkdirSync(uploadDir, { recursive: true });
+const upload = multer({
+  dest: uploadDir,
+  limits: { fileSize: 200 * 1024 * 1024 },
+});
 
 router.post("/start", async (req, res) => {
   const { youtubeUrl } = req.body;
@@ -28,13 +35,45 @@ router.post("/start", async (req, res) => {
 
   const jobId = uuidv4();
   jobs[jobId] = { status: "processing", step: "downloading", clips: [] };
-
   res.json({ jobId, status: "processing" });
 
-  processVideo(jobId, youtubeUrl).catch((err) => {
+  const workDir = path.join("temp", jobId);
+  fs.mkdirSync(workDir, { recursive: true });
+
+  (async () => {
+    try {
+      const videoPath = await downloadVideo(youtubeUrl, workDir);
+      await runPipeline(jobId, videoPath, workDir);
+    } catch (err) {
+      console.error("Job failed:", err);
+      jobs[jobId].status = "failed";
+      jobs[jobId].error = err.message;
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  })();
+});
+
+router.post("/upload", upload.single("video"), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: "Video file zaroori hai" });
+  }
+
+  const jobId = uuidv4();
+  const workDir = path.join("temp", jobId);
+  fs.mkdirSync(workDir, { recursive: true });
+
+  const ext = path.extname(req.file.originalname || "") || ".mp4";
+  const videoPath = path.join(workDir, `source${ext}`);
+  fs.renameSync(req.file.path, videoPath);
+
+  jobs[jobId] = { status: "processing", step: "extracting_audio", clips: [] };
+  res.json({ jobId, status: "processing" });
+
+  runPipeline(jobId, videoPath, workDir).catch((err) => {
     console.error("Job failed:", err);
     jobs[jobId].status = "failed";
     jobs[jobId].error = err.message;
+    fs.rmSync(workDir, { recursive: true, force: true });
   });
 });
 
@@ -44,7 +83,6 @@ router.get("/:jobId/status", (req, res) => {
   res.json(job);
 });
 
-// Video/audio file ki duration seconds mein nikalta hai
 function getDuration(filePath) {
   return new Promise((resolve, reject) => {
     ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -54,15 +92,8 @@ function getDuration(filePath) {
   });
 }
 
-async function processVideo(jobId, youtubeUrl) {
-  const workDir = path.join("temp", jobId);
-  fs.mkdirSync(workDir, { recursive: true });
-
+async function runPipeline(jobId, videoPath, workDir) {
   try {
-    jobs[jobId].step = "downloading";
-    const videoPath = await downloadVideo(youtubeUrl, workDir);
-
-    // Safety check: bahut lambi video ko yahin reject karo, crash hone se pehle
     const duration = await getDuration(videoPath);
     if (duration > MAX_DURATION_SECONDS) {
       throw new Error(
@@ -94,7 +125,6 @@ async function processVideo(jobId, youtubeUrl) {
     jobs[jobId].step = "done";
     jobs[jobId].clips = finalClips;
   } finally {
-    // Chahe success ho ya fail, temp files hamesha clean karo (space bachane ke liye)
     fs.rmSync(workDir, { recursive: true, force: true });
   }
 }
